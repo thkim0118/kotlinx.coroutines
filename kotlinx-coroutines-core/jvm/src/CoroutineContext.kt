@@ -2,12 +2,14 @@
  * Copyright 2016-2020 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license.
  */
 
+@file:Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER")
+
 package kotlinx.coroutines
 
 import kotlinx.coroutines.internal.*
 import kotlinx.coroutines.scheduling.*
-import java.util.concurrent.atomic.*
 import kotlin.coroutines.*
+import kotlin.coroutines.jvm.internal.*
 
 internal const val COROUTINES_SCHEDULER_PROPERTY_NAME = "kotlinx.coroutines.scheduler"
 
@@ -45,6 +47,72 @@ internal actual inline fun <T> withCoroutineContext(context: CoroutineContext, c
         return block()
     } finally {
         restoreThreadContext(context, oldValue)
+    }
+}
+
+/**
+ * Executes a block using a context of a given continuation.
+ */
+internal actual inline fun <T> withContinuationContext(continuation: Continuation<*>, countOrElement: Any?, block: () -> T): T {
+    val context = continuation.context
+    val oldValue = updateThreadContext(context, countOrElement)
+    val undispatchedCompletion = if (oldValue !== NO_THREAD_ELEMENTS) {
+        // Only if some values were replaced we'll go to the slow path of figuring out where/how to restore them
+        continuation.undispatchedCompletion()
+    } else
+        null // fast path -- don't even try to find undispatchedCompletion as there's nothing to restore in the context
+    undispatchedCompletion?.saveThreadContext(context, oldValue)
+    try {
+        return block()
+    } finally {
+        if (undispatchedCompletion == null || undispatchedCompletion.clearThreadContext())
+            restoreThreadContext(context, oldValue)
+    }
+}
+
+internal tailrec fun Continuation<*>.undispatchedCompletion(): UndispatchedCoroutine<*>? {
+    // Find direct completion of this continuation
+    val completion: Continuation<*> = when (this) {
+        is BaseContinuationImpl -> completion ?: return null // regular suspending function -- direct resume
+        is DispatchedCoroutine -> return null // dispatches on resume
+        is ScopeCoroutine -> uCont // other scoped coroutine -- direct resume
+        else -> return null // something else -- not supported
+    }
+    if (completion is UndispatchedCoroutine<*>) return completion // found UndispatchedCoroutine!
+    return completion.undispatchedCompletion() // walk up the call stack with tail call
+}
+
+// Used by withContext when context changes, but dispatcher stays the same
+internal actual class UndispatchedCoroutine<in T> actual constructor(
+    context: CoroutineContext,
+    uCont: Continuation<T>
+) : ScopeCoroutine<T>(context, uCont) {
+    private var savedContext: CoroutineContext? = null
+    private var savedOldValue: Any? = null
+
+    fun saveThreadContext(context: CoroutineContext, oldValue: Any?) {
+        savedContext = context
+        savedOldValue = oldValue
+    }
+
+    fun clearThreadContext(): Boolean {
+        if (savedContext == null) return false
+        savedContext = null
+        savedOldValue = null
+        return true
+    }
+
+    override fun afterResume(state: Any?) {
+        savedContext?.let { context ->
+            restoreThreadContext(context, savedOldValue)
+            savedContext = null
+            savedOldValue = null
+        }
+        // resume undispatched -- update context but stay on the same dispatcher
+        val result = recoverResult(state, uCont)
+        withContinuationContext(uCont, null) {
+            uCont.resumeWith(result)
+        }
     }
 }
 
