@@ -5,6 +5,7 @@
 package kotlinx.coroutines.flow
 
 import kotlinx.atomicfu.*
+import kotlinx.atomicfu.locks.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.flow.internal.*
@@ -84,7 +85,7 @@ import kotlin.native.concurrent.*
  *
  * Use [SharedFlow] when you need a [StateFlow] with tweaks in its behavior such as extra buffering, replaying more
  * values, or omitting the initial value.
- * 
+ *
  * ### StateFlow vs ConflatedBroadcastChannel
  *
  * Conceptually, state flow is similar to [ConflatedBroadcastChannel]

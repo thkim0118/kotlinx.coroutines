@@ -4,8 +4,8 @@
 
 package kotlinx.coroutines.flow.internal
 
+import kotlinx.atomicfu.locks.*
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.internal.*
 import kotlin.coroutines.*
 import kotlin.jvm.*
 import kotlin.native.concurrent.*

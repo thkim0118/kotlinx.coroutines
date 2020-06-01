@@ -11,6 +11,7 @@ import kotlinx.coroutines.internal.*
 import kotlin.coroutines.*
 import kotlin.jvm.*
 import kotlin.native.concurrent.*
+import kotlinx.atomicfu.locks.*
 
 /**
  * A _hot_ [Flow] that shares emitted values among all its collectors in a broadcast fashion, so that all collectors
