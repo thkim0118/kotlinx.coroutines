@@ -52,25 +52,51 @@ class FreezingTest : TestBase() {
         assertTrue(job.isCancelled)
     }
 
-//    @Test
-//    fun testStateFlowValue() = runTest {
-//        val stateFlow = MutableStateFlow(0)
-//        stateFlow.freeze()
-//        stateFlow.value = 1
-//    }
-//
-//    @Test
-//    @OptIn(ExperimentalStdlibApi::class)
-//    fun testStateFlowCollector() = runTest {
-//        val stateFlow = MutableStateFlow(0)
-//        stateFlow.freeze()
-//        repeat(10) {
-//            launch {
-//                stateFlow.collect {
-//                    if (it == 42) cancel()
-//                }
-//            }
-//        }
-//        stateFlow.value = 42
-//    }
+    @Test
+    fun testStateFlowValue() = runTest {
+        val stateFlow = MutableStateFlow(0)
+        stateFlow.freeze()
+        stateFlow.value = 1
+    }
+
+    @Test
+    fun testStateFlowCollector() = runTest {
+        val stateFlow = MutableStateFlow(0)
+        stateFlow.freeze()
+        repeat(10) {
+            launch {
+                stateFlow.collect {
+                    if (it == 42) cancel()
+                }
+            }
+        }
+        stateFlow.value = 42
+    }
+
+    @Test
+    fun testSharedFlow() = runTest {
+        val sharedFlow = MutableSharedFlow<Int>(0)
+        sharedFlow.freeze()
+        val job = launch {
+            sharedFlow.collect {
+                expect(it)
+            }
+        }
+        yield()
+        repeat(10) {
+            sharedFlow.emit(it + 1)
+        }
+        job.cancelAndJoin()
+        finish(11)
+    }
+
+    @Test
+    fun testSharedFlowSubscriptionsCount() = runTest {
+        val sharedFlow = MutableSharedFlow<Int>(0)
+        sharedFlow.freeze()
+        val job = launch { sharedFlow.collect {} }
+        val subscriptions = sharedFlow.subscriptionCount.filter { count -> count > 0 }.first()
+        assertEquals(1, subscriptions)
+        job.cancelAndJoin()
+    }
 }
