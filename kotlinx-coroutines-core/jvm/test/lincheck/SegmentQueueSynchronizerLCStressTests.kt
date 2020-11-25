@@ -3,17 +3,18 @@
  */
 
 @file:Suppress("unused")
-package kotlinx.coroutines.linearizability
+package kotlinx.coroutines.lincheck
 
 import kotlinx.atomicfu.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.internal.*
 import kotlinx.coroutines.internal.SegmentQueueSynchronizer.CancellationMode.*
 import kotlinx.coroutines.internal.SegmentQueueSynchronizer.ResumeMode.*
-import kotlinx.coroutines.lincheck.*
 import kotlinx.coroutines.sync.*
 import org.jetbrains.kotlinx.lincheck.*
+import org.jetbrains.kotlinx.lincheck.annotations.*
 import org.jetbrains.kotlinx.lincheck.annotations.Operation
+import org.jetbrains.kotlinx.lincheck.strategy.managed.modelchecking.*
 import org.jetbrains.kotlinx.lincheck.verifier.*
 import kotlin.coroutines.*
 import kotlin.reflect.*
@@ -34,6 +35,7 @@ import kotlin.reflect.*
  * it is hard to make [tryAcquire] linearizable in this case, so that
  * it is simply not supported here.
  */
+@OptIn(HazardousConcurrentApi::class)
 internal class AsyncSemaphore(permits: Int) : SegmentQueueSynchronizer<Unit>(), Semaphore {
     override val resumeMode get() = ASYNC
 
@@ -77,6 +79,7 @@ internal class AsyncSemaphore(permits: Int) : SegmentQueueSynchronizer<Unit>(), 
  * model, when continuation can be cancelled if it is logically resumed
  * but not dispatched yet.
  */
+@OptIn(HazardousConcurrentApi::class)
 internal class AsyncSemaphoreSmart(permits: Int) : SegmentQueueSynchronizer<Unit>(), Semaphore {
     override val resumeMode get() = ASYNC
     override val cancellationMode get() = SMART_SYNC
@@ -128,6 +131,7 @@ internal class AsyncSemaphoreSmart(permits: Int) : SegmentQueueSynchronizer<Unit
  * the synchronization on resumption, so that the permit is going to be returned
  * back to the semaphore in [returnValue] function.
  */
+@OptIn(HazardousConcurrentApi::class)
 internal class SyncSemaphoreSmart(permits: Int) : SegmentQueueSynchronizer<Boolean>(), Semaphore {
     override val resumeMode get() = SYNC
     override val cancellationMode get() = SMART_SYNC
@@ -183,6 +187,7 @@ internal class SyncSemaphoreSmart(permits: Int) : SegmentQueueSynchronizer<Boole
     }
 }
 
+@OptIn(HazardousConcurrentApi::class)
 abstract class AsyncSemaphoreLincheckTestBase(semaphore: Semaphore, val seqSpec: KClass<*>) : AbstractLincheckTest() {
     private val s = semaphore
 
@@ -195,6 +200,9 @@ abstract class AsyncSemaphoreLincheckTestBase(semaphore: Semaphore, val seqSpec:
     override fun <O : Options<O, *>> O.customize(isStressTest: Boolean) =
         actorsBefore(0)
        .sequentialSpecification(seqSpec.java)
+
+    override fun ModelCheckingOptions.customize(isStressTest: Boolean) =
+        checkObstructionFreedom()
 }
 
 class SemaphoreUnboundedSequential1 : SemaphoreSequential(1, false)
@@ -203,7 +211,13 @@ class SemaphoreUnboundedSequential2 : SemaphoreSequential(2, false)
 class AsyncSemaphore1LincheckTest : AsyncSemaphoreLincheckTestBase(AsyncSemaphore(1), SemaphoreUnboundedSequential1::class)
 class AsyncSemaphore2LincheckTest : AsyncSemaphoreLincheckTestBase(AsyncSemaphore(2), SemaphoreUnboundedSequential2::class)
 
-class AsyncSemaphoreSmart1LincheckTest : AsyncSemaphoreLincheckTestBase(AsyncSemaphoreSmart(1), SemaphoreUnboundedSequential1::class)
+class AsyncSemaphoreSmart1LincheckTest : AsyncSemaphoreLincheckTestBase(AsyncSemaphoreSmart(1), SemaphoreUnboundedSequential1::class) {
+    override fun <O : Options<O, *>> O.customize(isStressTest: Boolean): O =
+        threads(2).actorsPerThread(2)
+
+    override fun ModelCheckingOptions.customize(isStressTest: Boolean): ModelCheckingOptions =
+        invocationsPerIteration(Int.MAX_VALUE)
+}
 class AsyncSemaphoreSmart2LincheckTest : AsyncSemaphoreLincheckTestBase(AsyncSemaphoreSmart(2), SemaphoreUnboundedSequential2::class)
 
 class SyncSemaphoreSmart1LincheckTest : SemaphoreLincheckTestBase(SyncSemaphoreSmart(1), SemaphoreUnboundedSequential1::class)
@@ -316,6 +330,9 @@ internal abstract class CountDownLatchLincheckTestBase(val cdl: CountDownLatch, 
         actorsBefore(0)
         .actorsAfter(0)
         .sequentialSpecification(seqSpec.java)
+
+    override fun ModelCheckingOptions.customize(isStressTest: Boolean) =
+        checkObstructionFreedom()
 }
 
 class CountDownLatchSequential1 : CountDownLatchSequential(1)
@@ -432,6 +449,9 @@ abstract class BarrierLincheckTestBase(parties: Int, val seqSpec: KClass<*>) : A
         .actorsAfter(0)
         .threads(3)
         .sequentialSpecification(seqSpec.java)
+
+    override fun ModelCheckingOptions.customize(isStressTest: Boolean) =
+        checkObstructionFreedom()
 }
 
 class BarrierSequential1 : BarrierSequential(1)
@@ -702,6 +722,16 @@ internal class BlockingStackPool<T: Any> : SegmentQueueSynchronizer<T>(), Blocki
     // to the pool [put] is naturally used.
     override fun returnValue(value: T) = put(value)
 
+    internal fun stateRepresentation(): String {
+       val elements = ArrayList<T?>()
+       var curNode = head.value
+       while (curNode != null) {
+           elements += curNode.element
+           curNode = curNode.next
+       }
+        return "availableElements=${availableElements.value},elements=$elements,sqs=<${super.toString()}>"
+    }
+
     class StackNode<T>(val element: T?, val next: StackNode<T>?)
 }
 
@@ -709,11 +739,23 @@ abstract class BlockingPoolLincheckTestBase(val p: BlockingPool<Unit>) : Abstrac
     @Operation
     fun put() = p.put(Unit)
 
-    @Operation
-    suspend fun retrieve() = p.retrieve()
+    @Operation(allowExtraSuspension = true)
+    suspend fun retrieve() {
+        val res = p.retrieve()
+    }
+
+    @StateRepresentation
+    fun stateRepresentation() = when(p) {
+        is BlockingStackPool<*> -> p.stateRepresentation()
+        is BlockingQueuePool<*> -> p.toString()
+        else -> error("Unknown pool type: ${p::class.simpleName}")
+    }
 
     override fun <O : Options<O, *>> O.customize(isStressTest: Boolean) =
         sequentialSpecification(BlockingPoolUnitSequential::class.java)
+
+    override fun ModelCheckingOptions.customize(isStressTest: Boolean) =
+        checkObstructionFreedom()
 }
 class BlockingQueuePoolLincheckTest : BlockingPoolLincheckTestBase(BlockingQueuePool())
 class BlockingStackPoolLincheckTest : BlockingPoolLincheckTestBase(BlockingStackPool())

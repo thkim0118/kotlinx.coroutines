@@ -8,6 +8,7 @@ import kotlinx.atomicfu.*
 import kotlinx.coroutines.*
 import kotlin.test.*
 
+@OptIn(HazardousConcurrentApi::class)
 class MutexTest : TestBase() {
     @Test
     fun testSimple() = runTest {

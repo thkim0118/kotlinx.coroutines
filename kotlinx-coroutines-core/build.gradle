@@ -204,8 +204,8 @@ jvmTest {
         jvmArgs = ['--add-opens', 'java.base/jdk.internal.misc=ALL-UNNAMED',   // required for transformation
                    '--add-exports', 'java.base/jdk.internal.util=ALL-UNNAMED'] // in the model checking mode
         maxHeapSize = '6g' // we need more memory for model checking
-        systemProperty 'kotlinx.coroutines.semaphore.segmentSize', '2' // better for testing in general
-        systemProperty 'kotlinx.coroutines.semaphore.maxSpinCycles', '1' // better for model checking
+        systemProperty 'kotlinx.coroutines.sqs..segmentSize', '2' // better for testing in general
+        systemProperty 'kotlinx.coroutines.sqs.maxSpinCycles', '1' // better for model checking
         systemProperty 'kotlinx.coroutines.scheduler.keep.alive.sec', '100000' // any unpark problem hangs test
     }
     // TODO: JVM IR generates different stacktrace so temporary disable stacktrace tests
@@ -246,8 +246,8 @@ task jvmLincheckTest(type: Test, dependsOn: compileTestKotlinJvm) {
     testLogging.showStandardStreams = true
     jvmArgs = ['--add-opens', 'java.base/jdk.internal.misc=ALL-UNNAMED',   // required for transformation
                '--add-exports', 'java.base/jdk.internal.util=ALL-UNNAMED'] // in the model checking mode
-    systemProperty 'kotlinx.coroutines.semaphore.segmentSize', '2'
-    systemProperty 'kotlinx.coroutines.semaphore.maxSpinCycles', '1' // better for the model checking mode
+    systemProperty 'kotlinx.coroutines.sqs.segmentSize', '2'
+    systemProperty 'kotlinx.coroutines.sqs.maxSpinCycles', '1' // better for the model checking mode
 }
 
 task jdk16Test(type: Test, dependsOn: [compileTestKotlinJvm, checkJdk16]) {

@@ -10,6 +10,7 @@ import org.jetbrains.kotlinx.lincheck.*
 import org.jetbrains.kotlinx.lincheck.annotations.Operation
 import org.jetbrains.kotlinx.lincheck.strategy.managed.modelchecking.*
 
+@OptIn(HazardousConcurrentApi::class)
 class MutexLincheckTest : AbstractLincheckTest() {
     private val mutex = Mutex()
 

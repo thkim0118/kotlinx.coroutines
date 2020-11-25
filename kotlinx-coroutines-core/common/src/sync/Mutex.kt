@@ -38,6 +38,7 @@ public interface Mutex {
      * @param owner Optional owner token for debugging. When `owner` is specified (non-null value) and this mutex
      *        is already locked with the same token (same identity), this function throws [IllegalStateException].
      */
+    @HazardousConcurrentApi
     public fun tryLock(owner: Any? = null): Boolean
 
     /**
@@ -61,6 +62,7 @@ public interface Mutex {
      * @param owner Optional owner token for debugging. When `owner` is specified (non-null value) and this mutex
      *        is already locked with the same token (same identity), this function throws [IllegalStateException].
      */
+    @HazardousConcurrentApi
     public suspend fun lock(owner: Any? = null)
 
     /**
@@ -68,6 +70,7 @@ public interface Mutex {
      * Additional parameter for the clause in the `owner` (see [lock]) and when the clause is selected
      * the reference to this mutex is passed into the corresponding block.
      */
+    @HazardousConcurrentApi
     public val onLock: SelectClause2<Any?, Mutex>
 
     /**
@@ -75,6 +78,7 @@ public interface Mutex {
      *
      * @return `true` on mutex lock by owner, `false` if not locker or it is locked by different owner
      */
+    @HazardousConcurrentApi
     public fun holdsLock(owner: Any): Boolean
 
     /**
@@ -84,6 +88,7 @@ public interface Mutex {
      * @param owner Optional owner token for debugging. When `owner` is specified (non-null value) and this mutex
      *        was locked with the different token (by identity), this function throws [IllegalStateException].
      */
+    @HazardousConcurrentApi
     public fun unlock(owner: Any? = null)
 }
 
@@ -105,7 +110,7 @@ public fun Mutex(locked: Boolean = false): Mutex =
  *
  * @return the return value of the action.
  */
-@OptIn(ExperimentalContracts::class)
+@OptIn(ExperimentalContracts::class, HazardousConcurrentApi::class)
 public suspend inline fun <T> Mutex.withLock(owner: Any? = null, action: () -> T): T {
     contract { 
         callsInPlace(action, InvocationKind.EXACTLY_ONCE)
@@ -163,6 +168,7 @@ internal class MutexImpl(locked: Boolean) : Mutex, SelectClause2<Any?, Mutex> {
         return state is LockedQueue && state.isEmpty
     }
 
+    @HazardousConcurrentApi
     public override fun tryLock(owner: Any?): Boolean {
         _state.loop { state ->
             when (state) {
@@ -183,6 +189,7 @@ internal class MutexImpl(locked: Boolean) : Mutex, SelectClause2<Any?, Mutex> {
         }
     }
 
+    @HazardousConcurrentApi
     public override suspend fun lock(owner: Any?) {
         // fast-path -- try lock
         if (tryLock(owner)) return
@@ -190,6 +197,7 @@ internal class MutexImpl(locked: Boolean) : Mutex, SelectClause2<Any?, Mutex> {
         return lockSuspend(owner)
     }
 
+    @OptIn(HazardousConcurrentApi::class)
     private suspend fun lockSuspend(owner: Any?) = suspendCancellableCoroutineReusable<Unit> sc@ { cont ->
         val waiter = LockCont(owner, cont)
         _state.loop { state ->
@@ -222,6 +230,7 @@ internal class MutexImpl(locked: Boolean) : Mutex, SelectClause2<Any?, Mutex> {
         }
     }
 
+    @HazardousConcurrentApi
     override val onLock: SelectClause2<Any?, Mutex>
         get() = this
 
@@ -291,6 +300,7 @@ internal class MutexImpl(locked: Boolean) : Mutex, SelectClause2<Any?, Mutex> {
         }
     }
 
+    @HazardousConcurrentApi
     public override fun holdsLock(owner: Any) =
             _state.value.let { state ->
                 when (state) {
@@ -300,6 +310,7 @@ internal class MutexImpl(locked: Boolean) : Mutex, SelectClause2<Any?, Mutex> {
                 }
             }
 
+    @HazardousConcurrentApi
     public override fun unlock(owner: Any?) {
         _state.loop { state ->
             when (state) {
@@ -357,6 +368,7 @@ internal class MutexImpl(locked: Boolean) : Mutex, SelectClause2<Any?, Mutex> {
         abstract fun completeResumeLockWaiter(token: Any)
     }
 
+    @OptIn(HazardousConcurrentApi::class)
     private inner class LockCont(
         owner: Any?,
         @JvmField val cont: CancellableContinuation<Unit>
@@ -369,6 +381,7 @@ internal class MutexImpl(locked: Boolean) : Mutex, SelectClause2<Any?, Mutex> {
         override fun toString(): String = "LockCont[$owner, $cont] for ${this@MutexImpl}"
     }
 
+    @OptIn(HazardousConcurrentApi::class)
     private inner class LockSelect<R>(
         owner: Any?,
         @JvmField val select: SelectInstance<R>,

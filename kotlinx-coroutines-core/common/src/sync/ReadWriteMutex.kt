@@ -153,7 +153,7 @@ public suspend inline fun <T> ReadWriteMutex.withWriteLock(action: () -> T): T {
  *                             and resume it.
  *
  */
-private class ReadWriteMutexImpl : ReadWriteMutex {
+internal class ReadWriteMutexImpl : ReadWriteMutex {
     private val R = atomic(0L)
     private val W = atomic(0)
 
@@ -556,8 +556,8 @@ private class ReadWriteMutexImpl : ReadWriteMutex {
         }
     }
 
-    override fun toString() = "R=<${R.value.awf},${R.value.wwf},${R.value.ar},${R.value.wr}>," +
-        "W=<${W.value.ww},${W.value.wla},${W.value.wlrp},${W.value.wrf}>"
+    internal fun stateRepresentation() = "R=<${R.value.awf},${R.value.wwf},${R.value.ar},${R.value.wr}>," +
+        "W=<${W.value.ww},${W.value.wla},${W.value.wlrp},${W.value.wrf}>,SQS_R=<$sqsForReaders>,SQS_W=<$sqsForWriters>"
 
     companion object {
         inline val Long.awf: Boolean get() = this and AWF_BIT != 0L

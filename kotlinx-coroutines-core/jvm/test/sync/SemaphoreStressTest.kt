@@ -4,6 +4,7 @@ import kotlinx.coroutines.*
 import org.junit.Test
 import kotlin.test.*
 
+@OptIn(HazardousConcurrentApi::class)
 class SemaphoreStressTest : TestBase() {
     @Test
     fun stressTestAsMutex() = runBlocking(Dispatchers.Default) {

@@ -2,7 +2,7 @@
  * Copyright 2016-2020 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license.
  */
 
-package kotlinx.coroutines.linearizability
+package kotlinx.coroutines.lincheck
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.*
@@ -11,12 +11,10 @@ import org.jetbrains.kotlinx.lincheck.annotations.*
 import org.jetbrains.kotlinx.lincheck.annotations.Operation
 import org.jetbrains.kotlinx.lincheck.paramgen.*
 import org.jetbrains.kotlinx.lincheck.strategy.managed.modelchecking.*
-import org.jetbrains.kotlinx.lincheck.strategy.stress.*
 import org.jetbrains.kotlinx.lincheck.verifier.*
-import org.junit.*
 
-internal class ReadWriteMutexCounterLincheckTest {
-    val m = ReadWriteMutex()
+internal class ReadWriteMutexCounterLincheckTest : AbstractLincheckTest() {
+    val m = ReadWriteMutexImpl()
     var c = 0
 
     @Operation(cancellableOnSuspension = true, allowExtraSuspension = true)
@@ -26,30 +24,12 @@ internal class ReadWriteMutexCounterLincheckTest {
     suspend fun get(): Int = m.withReadLock { c }
 
     @StateRepresentation
-    fun stateRepresentation(): String = "$c+$m"
+    fun stateRepresentation(): String = "$c + ${m.stateRepresentation()}"
 
-    @Test
-    fun test2() = ModelCheckingOptions()
-        .iterations(50)
-        .actorsBefore(0)
+    override fun <O : Options<O, *>> O.customize(isStressTest: Boolean): O =
+        actorsBefore(0)
         .actorsAfter(0)
-        .threads(2)
-        .actorsPerThread(3)
-        .logLevel(LoggingLevel.INFO)
-        .invocationsPerIteration(100_000)
         .sequentialSpecification(ReadWriteMutexCounterSequential::class.java)
-        .check(this::class)
-
-    @Test
-    fun test() = StressOptions()
-        .actorsBefore(0)
-        .actorsAfter(0)
-        .threads(3)
-        .actorsPerThread(5)
-        .invocationsPerIteration(100_000)
-        .logLevel(LoggingLevel.INFO)
-        .sequentialSpecification(ReadWriteMutexCounterSequential::class.java)
-        .check(this::class)
 }
 
 class ReadWriteMutexCounterSequential : VerifierState() {
@@ -62,7 +42,7 @@ class ReadWriteMutexCounterSequential : VerifierState() {
 
 @OptIn(HazardousConcurrentApi::class)
 class ReadWriteMutexLincheckTest : AbstractLincheckTest() {
-    private val m = ReadWriteMutex()
+    private val m = ReadWriteMutexImpl()
     private val readLockAcquired = IntArray(6)
     private val writeLockAcquired = BooleanArray(6)
 
@@ -95,13 +75,16 @@ class ReadWriteMutexLincheckTest : AbstractLincheckTest() {
         return true
     }
 
+    @StateRepresentation
+    fun stateRepresentation() = m.stateRepresentation()
+
     override fun <O : Options<O, *>> O.customize(isStressTest: Boolean) =
         actorsBefore(0)
         .actorsAfter(0)
         .sequentialSpecification(ReadWriteMutexSequential::class.java)
 
-    @StateRepresentation
-    fun stateRepresentation() = m.toString()
+    override fun ModelCheckingOptions.customize(isStressTest: Boolean) =
+        checkObstructionFreedom()
 }
 
 class ReadWriteMutexSequential : VerifierState() {

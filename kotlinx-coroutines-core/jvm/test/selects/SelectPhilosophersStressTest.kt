@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.*
 import org.junit.Test
 import kotlin.test.*
 
+@OptIn(HazardousConcurrentApi::class)
 class SelectPhilosophersStressTest : TestBase() {
     private val TEST_DURATION = 3000L * stressTestMultiplier
 

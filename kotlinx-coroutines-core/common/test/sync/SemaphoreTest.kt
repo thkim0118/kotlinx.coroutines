@@ -6,6 +6,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
+@OptIn(HazardousConcurrentApi::class)
 class SemaphoreTest : TestBase() {
 
     @Test

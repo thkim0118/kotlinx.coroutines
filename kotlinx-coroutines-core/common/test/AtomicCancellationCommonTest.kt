@@ -8,6 +8,7 @@ import kotlinx.coroutines.selects.*
 import kotlinx.coroutines.sync.*
 import kotlin.test.*
 
+@OptIn(HazardousConcurrentApi::class)
 class AtomicCancellationCommonTest : TestBase() {
     @Test
     fun testCancellableLaunch() = runTest {

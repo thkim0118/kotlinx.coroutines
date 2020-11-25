@@ -65,11 +65,15 @@ public annotation class ObsoleteCoroutinesApi
 )
 public annotation class InternalCoroutinesApi
 
+/**
+ * Marks declarations that provide **low-level** and **error-prone** concurrency API, which is not recommended to use
+ * in typical applications and pro, but still can be important in some solutions
+ */
 @MustBeDocumented
 @Retention(value = AnnotationRetention.BINARY)
 @RequiresOptIn(
     level = RequiresOptIn.Level.ERROR,
-    message = "TODO"
+    message = "This API is low-level and error-prone. It recommended to use the high-level one that is declared as safe."
 )
 @Target(AnnotationTarget.FUNCTION, AnnotationTarget.PROPERTY)
 public annotation class HazardousConcurrentApi

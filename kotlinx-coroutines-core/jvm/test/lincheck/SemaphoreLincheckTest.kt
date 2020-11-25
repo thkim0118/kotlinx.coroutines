@@ -7,10 +7,13 @@ package kotlinx.coroutines.lincheck
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.*
+import org.jetbrains.kotlinx.lincheck.*
 import org.jetbrains.kotlinx.lincheck.annotations.Operation
+import org.jetbrains.kotlinx.lincheck.strategy.managed.modelchecking.*
 import org.jetbrains.kotlinx.lincheck.verifier.*
 import kotlin.reflect.*
 
+@OptIn(HazardousConcurrentApi::class)
 abstract class SemaphoreLincheckTestBase(semaphore: Semaphore, val seqSpec: KClass<*>) : AbstractLincheckTest() {
     private val s = semaphore
 
@@ -22,6 +25,13 @@ abstract class SemaphoreLincheckTestBase(semaphore: Semaphore, val seqSpec: KCla
 
     @Operation(handleExceptionsAsResult = [IllegalStateException::class])
     fun release() = s.release()
+
+    override fun <O : Options<O, *>> O.customize(isStressTest: Boolean): O =
+        actorsBefore(0)
+        .sequentialSpecification(seqSpec.java)
+
+    override fun ModelCheckingOptions.customize(isStressTest: Boolean) =
+        checkObstructionFreedom()
 }
 
 open class SemaphoreSequential(val permits: Int, val boundMaxPermits: Boolean) : VerifierState() {

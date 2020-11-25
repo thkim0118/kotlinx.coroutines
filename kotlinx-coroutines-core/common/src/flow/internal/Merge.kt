@@ -52,6 +52,7 @@ internal class ChannelFlowMerge<T>(
         return scope.flowProduce(context, capacity, block = collectToFun)
     }
 
+    @OptIn(HazardousConcurrentApi::class)
     override suspend fun collectTo(scope: ProducerScope<T>) {
         val semaphore = Semaphore(concurrency)
         val collector = SendingCollector(scope)

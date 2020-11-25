@@ -11,6 +11,7 @@ import kotlinx.coroutines.internal.SegmentQueueSynchronizer.ResumeMode.SYNC
 import kotlinx.coroutines.internal.SegmentQueueSynchronizer.CancellationMode.*
 import kotlinx.coroutines.sync.*
 import kotlin.coroutines.*
+import kotlin.math.*
 import kotlin.native.concurrent.*
 
 /**
@@ -400,7 +401,7 @@ internal abstract class SegmentQueueSynchronizer<T : Any> {
                 // continuation, we can simply resume it.
                 else -> {
                     // Resume the continuation and mark the cell
-                    // as `DONE` to avoid memory leaks.
+                    // as `RESUMED` to avoid memory leaks.
                     (cellState as Continuation<T>).resume(value)
                     segment.set(i, RESUMED)
                     return TRY_RESUME_SUCCESS
@@ -499,16 +500,24 @@ internal abstract class SegmentQueueSynchronizer<T : Any> {
 
         override fun toString() = "SQSCancellationHandler[$segment, $index]"
     }
-}
 
-/**
- * Tries to resume this continuation atomically,
- * returns `true` if succeeds and `false` otherwise.
- */
-private fun <T> CancellableContinuation<T>.tryResume0(value: T, onCancellation: ((cause: Throwable) -> Unit)): Boolean {
-    val token = tryResume(value, onCancellation) ?: return false
-    completeResume(token)
-    return true
+    override fun toString(): String {
+        val waiters = ArrayList<String>()
+        var curSegment = head.value
+        var curIdx = deqIdx.value
+        while (curIdx < max(enqIdx.value, deqIdx.value)) {
+            val i = (curIdx % SEGMENT_SIZE).toInt()
+            waiters += when {
+                curIdx < curSegment.id * SEGMENT_SIZE -> "CANCELLED"
+                curSegment.get(i) is Continuation<*> -> "<cont>"
+                else -> curSegment.get(i).toString()
+            }
+            curIdx++
+            if (curIdx == (curSegment.id + 1) * SEGMENT_SIZE)
+                curSegment = curSegment.next!!
+        }
+        return "enqIdx=${enqIdx.value},deqIdx=${deqIdx.value},waiters=$waiters"
+    }
 }
 
 private fun createSegment(id: Long, prev: SQSSegment?) = SQSSegment(id, prev, 0)
@@ -623,6 +632,8 @@ private val CANCELLED = Symbol("CANCELLED")
 private val REFUSE = Symbol("REFUSE")
 @SharedImmutable
 private val RESUMED = Symbol("RESUMED")
+@SharedImmutable
+private val RESUMING_OR_CANCELLING = Symbol("RESUMING_OR_CANCELLING")
 
 private const val TRY_RESUME_SUCCESS = 0
 private const val TRY_RESUME_FAIL_CANCELLED = 1

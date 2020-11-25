@@ -46,6 +46,7 @@ public interface Semaphore {
      *
      * Use [tryAcquire] to try acquire a permit of this semaphore without suspension.
      */
+    @HazardousConcurrentApi
     public suspend fun acquire()
 
     /**
@@ -53,6 +54,7 @@ public interface Semaphore {
      *
      * @return `true` if a permit was acquired, `false` otherwise.
      */
+    @HazardousConcurrentApi
     public fun tryAcquire(): Boolean
 
     /**
@@ -60,6 +62,7 @@ public interface Semaphore {
      * suspending acquirer if there is one at the point of invocation.
      * Throws [IllegalStateException] if the number of [release] invocations is greater than the number of preceding [acquire].
      */
+    @HazardousConcurrentApi
     public fun release()
 }
 
@@ -78,7 +81,7 @@ public fun Semaphore(permits: Int, acquiredPermits: Int = 0): Semaphore = Semaph
  *
  * @return the return value of the [action].
  */
-@OptIn(ExperimentalContracts::class)
+@OptIn(ExperimentalContracts::class, HazardousConcurrentApi::class)
 public suspend inline fun <T> Semaphore.withPermit(action: () -> T): T {
     contract {
         callsInPlace(action, InvocationKind.EXACTLY_ONCE)
@@ -108,6 +111,7 @@ private class SemaphoreImpl(private val permits: Int, acquiredPermits: Int) : Se
     private val _availablePermits = atomic(permits - acquiredPermits)
     override val availablePermits: Int get() = max(_availablePermits.value, 0)
 
+    @HazardousConcurrentApi
     override fun tryAcquire(): Boolean = _availablePermits.loop { p ->
         // Try to decrement the number of available
         // permits if it is greater than zero.
@@ -115,6 +119,7 @@ private class SemaphoreImpl(private val permits: Int, acquiredPermits: Int) : Se
         if (_availablePermits.compareAndSet(p, p - 1)) return true
     }
 
+    @HazardousConcurrentApi
     override suspend fun acquire() {
         // Decrement the number of available permits.
         val p = _availablePermits.getAndDecrement()
@@ -146,6 +151,7 @@ private class SemaphoreImpl(private val permits: Int, acquiredPermits: Int) : Se
         }
     }
 
+    @HazardousConcurrentApi
     override fun release() {
         while (true) {
             // Increment the number of available permits
@@ -162,6 +168,7 @@ private class SemaphoreImpl(private val permits: Int, acquiredPermits: Int) : Se
         }
     }
 
+    @OptIn(HazardousConcurrentApi::class)
     override fun returnValue(value: Unit) {
         // Return the permit if the current continuation
         // is cancelled after the `tryResume` invocation
