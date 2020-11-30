@@ -2,14 +2,13 @@
  * Copyright 2016-2020 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license.
  */
 
-@file:Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER")
-
 package kotlinx.coroutines
 
 import kotlinx.coroutines.internal.*
 import kotlinx.coroutines.scheduling.*
 import kotlin.coroutines.*
 import kotlin.coroutines.jvm.internal.*
+import kotlin.coroutines.jvm.internal.CoroutineStackFrame
 
 internal const val COROUTINES_SCHEDULER_PROPERTY_NAME = "kotlinx.coroutines.scheduler"
 
@@ -58,7 +57,7 @@ internal actual inline fun <T> withContinuationContext(continuation: Continuatio
     val oldValue = updateThreadContext(context, countOrElement)
     val undispatchedCompletion = if (oldValue !== NO_THREAD_ELEMENTS) {
         // Only if some values were replaced we'll go to the slow path of figuring out where/how to restore them
-        continuation.undispatchedCompletion()
+        (continuation as? CoroutineStackFrame)?.undispatchedCompletion()
     } else
         null // fast path -- don't even try to find undispatchedCompletion as there's nothing to restore in the context
     undispatchedCompletion?.saveThreadContext(context, oldValue)
@@ -70,16 +69,14 @@ internal actual inline fun <T> withContinuationContext(continuation: Continuatio
     }
 }
 
-internal tailrec fun Continuation<*>.undispatchedCompletion(): UndispatchedCoroutine<*>? {
+internal tailrec fun CoroutineStackFrame.undispatchedCompletion(): UndispatchedCoroutine<*>? {
     // Find direct completion of this continuation
-    val completion: Continuation<*> = when (this) {
-        is BaseContinuationImpl -> completion ?: return null // regular suspending function -- direct resume
-        is DispatchedCoroutine -> return null // dispatches on resume
-        is ScopeCoroutine -> uCont // other scoped coroutine -- direct resume
-        else -> return null // something else -- not supported
+    val completion: CoroutineStackFrame? = when (this) {
+        is DispatchedCoroutine<*> -> return null // dispatches on resume
+        else -> callerFrame ?: return null // something else -- not supported
     }
     if (completion is UndispatchedCoroutine<*>) return completion // found UndispatchedCoroutine!
-    return completion.undispatchedCompletion() // walk up the call stack with tail call
+    return completion?.undispatchedCompletion() // walk up the call stack with tail call
 }
 
 // Used by withContext when context changes, but dispatcher stays the same
