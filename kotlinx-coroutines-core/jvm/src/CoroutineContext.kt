@@ -57,26 +57,34 @@ internal actual inline fun <T> withContinuationContext(continuation: Continuatio
     val oldValue = updateThreadContext(context, countOrElement)
     val undispatchedCompletion = if (oldValue !== NO_THREAD_ELEMENTS) {
         // Only if some values were replaced we'll go to the slow path of figuring out where/how to restore them
-        (continuation as? CoroutineStackFrame)?.undispatchedCompletion()
-    } else
+        continuation.updateUndispatchedCompletion(context, oldValue)
+    } else {
         null // fast path -- don't even try to find undispatchedCompletion as there's nothing to restore in the context
-    undispatchedCompletion?.saveThreadContext(context, oldValue)
+    }
     try {
         return block()
     } finally {
-        if (undispatchedCompletion == null || undispatchedCompletion.clearThreadContext())
+        if (undispatchedCompletion == null || undispatchedCompletion.clearThreadContext()) {
             restoreThreadContext(context, oldValue)
+        }
     }
+}
+
+internal fun Continuation<*>.updateUndispatchedCompletion(context: CoroutineContext, oldValue: Any?): UndispatchedCoroutine<*>? {
+    if (this !is CoroutineStackFrame) return null
+    val completion = undispatchedCompletion()
+    completion?.saveThreadContext(context, oldValue)
+    return completion
 }
 
 internal tailrec fun CoroutineStackFrame.undispatchedCompletion(): UndispatchedCoroutine<*>? {
     // Find direct completion of this continuation
-    val completion: CoroutineStackFrame? = when (this) {
+    val completion: CoroutineStackFrame = when (this) {
         is DispatchedCoroutine<*> -> return null // dispatches on resume
         else -> callerFrame ?: return null // something else -- not supported
     }
     if (completion is UndispatchedCoroutine<*>) return completion // found UndispatchedCoroutine!
-    return completion?.undispatchedCompletion() // walk up the call stack with tail call
+    return completion.undispatchedCompletion() // walk up the call stack with tail call
 }
 
 // Used by withContext when context changes, but dispatcher stays the same
