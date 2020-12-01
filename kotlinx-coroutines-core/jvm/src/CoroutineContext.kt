@@ -57,7 +57,7 @@ internal actual inline fun <T> withContinuationContext(continuation: Continuatio
     val oldValue = updateThreadContext(context, countOrElement)
     val undispatchedCompletion = if (oldValue !== NO_THREAD_ELEMENTS) {
         // Only if some values were replaced we'll go to the slow path of figuring out where/how to restore them
-        continuation.updateUndispatchedCompletion(context, oldValue)
+        updateUndispatchedCompletion(context, oldValue)
     } else {
         null // fast path -- don't even try to find undispatchedCompletion as there's nothing to restore in the context
     }
@@ -70,30 +70,24 @@ internal actual inline fun <T> withContinuationContext(continuation: Continuatio
     }
 }
 
-internal fun Continuation<*>.updateUndispatchedCompletion(context: CoroutineContext, oldValue: Any?): UndispatchedCoroutine<*>? {
-    if (this !is CoroutineStackFrame) return null
-    val completion = undispatchedCompletion()
-    completion?.saveThreadContext(context, oldValue)
-    return completion
+internal fun updateUndispatchedCompletion(context: CoroutineContext, oldValue: Any?): UndispatchedCoroutine<*>? {
+    val undispatched = context[UndispatchedMarker]?.coroutine ?: return null
+    undispatched.saveThreadContext(context, oldValue)
+    return undispatched
 }
 
-internal tailrec fun CoroutineStackFrame.undispatchedCompletion(): UndispatchedCoroutine<*>? {
-    // Find direct completion of this continuation
-    val completion: CoroutineStackFrame = when (this) {
-        is DispatchedCoroutine<*> -> return null // dispatches on resume
-        else -> callerFrame ?: return null // something else -- not supported
-    }
-    if (completion is UndispatchedCoroutine<*>) return completion // found UndispatchedCoroutine!
-    return completion.undispatchedCompletion() // walk up the call stack with tail call
-}
 
 // Used by withContext when context changes, but dispatcher stays the same
 internal actual class UndispatchedCoroutine<in T> actual constructor(
     context: CoroutineContext,
     uCont: Continuation<T>
-) : ScopeCoroutine<T>(context, uCont) {
+) : ScopeCoroutine<T>(context + UndispatchedMarker(null), uCont) {
     private var savedContext: CoroutineContext? = null
     private var savedOldValue: Any? = null
+
+    init {
+        parentContext[UndispatchedMarker]!!.coroutine = this
+    }
 
     fun saveThreadContext(context: CoroutineContext, oldValue: Any?) {
         savedContext = context
