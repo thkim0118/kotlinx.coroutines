@@ -174,19 +174,6 @@ public suspend fun <T> withContext(
 }
 
 /**
- * Undispatched marker required to properly locate undispatched switch points and restore thread-local context to its initial value.
- * Is not added as is as job to avoid being overridden.
- * Is hidden as private class so it's not possible to extract this element easily.
- *
- * `var` is required to avoid cyclic initialization problem with `this`. It's late-binded once in the
- * [UndispatchedCoroutine] ctor
- */
-internal class UndispatchedMarker(@JvmField var coroutine: UndispatchedCoroutine<*>?) :
-    AbstractCoroutineContextElement(Key) {
-    companion object Key : CoroutineContext.Key<UndispatchedMarker>
-}
-
-/**
  * Calls the specified suspending block with the given [CoroutineDispatcher], suspends until it
  * completes, and returns the result.
  *

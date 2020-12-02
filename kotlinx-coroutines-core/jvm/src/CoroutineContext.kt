@@ -76,17 +76,36 @@ internal fun updateUndispatchedCompletion(context: CoroutineContext, oldValue: A
     return undispatched
 }
 
+/**
+ * Undispatched marker required to properly locate undispatched switch points and restore thread-local context to its initial value.
+ * Is not added as is as job to avoid being overridden.
+ *
+ * `var` is required to avoid cyclic initialization problem with `this`. It's late-binded once in the
+ * [UndispatchedCoroutine] ctor.
+ */
+internal class UndispatchedMarker(
+    @JvmField var coroutine: UndispatchedCoroutine<*>?
+) : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<UndispatchedMarker>
+}
 
 // Used by withContext when context changes, but dispatcher stays the same
-internal actual class UndispatchedCoroutine<in T> actual constructor(
+internal actual class UndispatchedCoroutine<in T>(
     context: CoroutineContext,
+    marker: UndispatchedMarker,
     uCont: Continuation<T>
-) : ScopeCoroutine<T>(context + UndispatchedMarker(null), uCont) {
+) : ScopeCoroutine<T>(context + marker, uCont) {
+
+    actual constructor(
+        context: CoroutineContext,
+        uCont: Continuation<T>
+    ) : this(context, UndispatchedMarker(null), uCont)
+
     private var savedContext: CoroutineContext? = null
     private var savedOldValue: Any? = null
 
     init {
-        parentContext[UndispatchedMarker]!!.coroutine = this
+        marker.coroutine = this
     }
 
     fun saveThreadContext(context: CoroutineContext, oldValue: Any?) {
