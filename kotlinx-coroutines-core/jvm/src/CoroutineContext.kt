@@ -7,7 +7,6 @@ package kotlinx.coroutines
 import kotlinx.coroutines.internal.*
 import kotlinx.coroutines.scheduling.*
 import kotlin.coroutines.*
-import kotlin.coroutines.jvm.internal.*
 import kotlin.coroutines.jvm.internal.CoroutineStackFrame
 
 internal const val COROUTINES_SCHEDULER_PROPERTY_NAME = "kotlinx.coroutines.scheduler"
@@ -57,7 +56,7 @@ internal actual inline fun <T> withContinuationContext(continuation: Continuatio
     val oldValue = updateThreadContext(context, countOrElement)
     val undispatchedCompletion = if (oldValue !== NO_THREAD_ELEMENTS) {
         // Only if some values were replaced we'll go to the slow path of figuring out where/how to restore them
-        updateUndispatchedCompletion(context, oldValue)
+        continuation.updateUndispatchedCompletion(context, oldValue)
     } else {
         null // fast path -- don't even try to find undispatchedCompletion as there's nothing to restore in the context
     }
@@ -70,43 +69,54 @@ internal actual inline fun <T> withContinuationContext(continuation: Continuatio
     }
 }
 
-internal fun updateUndispatchedCompletion(context: CoroutineContext, oldValue: Any?): UndispatchedCoroutine<*>? {
-    val undispatched = context[UndispatchedMarker]?.coroutine ?: return null
-    undispatched.saveThreadContext(context, oldValue)
-    return undispatched
+internal fun Continuation<*>.updateUndispatchedCompletion(context: CoroutineContext, oldValue: Any?): UndispatchedCoroutine<*>? {
+    if (this !is CoroutineStackFrame) return null
+    /*
+     * Fast-path to detect whether we have unispatched coroutine at all in our stack.
+     *
+     * Implementation note.
+     * If we ever find that stackwalking for thread-locals is way too slow, here is another idea:
+     * 1) Store undispatched coroutine right in the `UndispatchedMarker` instance
+     * 2) To avoid issues with cross-dispatch boundary, remove `UndispatchedMarker`
+     *    from the context when creating dispatched coroutine in `withContext`.
+     *    Another option is to "unmark it" instead of removing to save an allocation.
+     *    Both options should work, but it requires more careful studying of the performance
+     *    and, mostly, maintainability impact.
+     */
+    val potentiallyHasUndispatchedCorotuine = context[UndispatchedMarker] !== null
+    if (!potentiallyHasUndispatchedCorotuine) return null
+    val completion = undispatchedCompletion()
+    completion?.saveThreadContext(context, oldValue)
+    return completion
+}
+
+internal tailrec fun CoroutineStackFrame.undispatchedCompletion(): UndispatchedCoroutine<*>? {
+    // Find direct completion of this continuation
+    val completion: CoroutineStackFrame = when (this) {
+        is DispatchedCoroutine<*> -> return null
+        else -> callerFrame ?: return null // something else -- not supported
+    }
+    if (completion is UndispatchedCoroutine<*>) return completion // found UndispatchedCoroutine!
+    return completion.undispatchedCompletion() // walk up the call stack with tail call
 }
 
 /**
- * Undispatched marker required to properly locate undispatched switch points and restore thread-local context to its initial value.
- * Is not added as is as job to avoid being overridden.
- *
- * `var` is required to avoid cyclic initialization problem with `this`. It's late-binded once in the
- * [UndispatchedCoroutine] ctor.
+ * Marker indicating that [UndispatchedCoroutine] exists somewhere up in the stack.
+ * Used as a performance optimization to avoid stack walking where it is not nesessary.
  */
-internal class UndispatchedMarker(
-    @JvmField var coroutine: UndispatchedCoroutine<*>?
-) : AbstractCoroutineContextElement(Key) {
-    companion object Key : CoroutineContext.Key<UndispatchedMarker>
+private object UndispatchedMarker: CoroutineContext.Element, CoroutineContext.Key<UndispatchedMarker> {
+    override val key: CoroutineContext.Key<*>
+        get() = this
 }
 
 // Used by withContext when context changes, but dispatcher stays the same
-internal actual class UndispatchedCoroutine<in T>(
+internal actual class UndispatchedCoroutine<in T>actual constructor (
     context: CoroutineContext,
-    marker: UndispatchedMarker,
     uCont: Continuation<T>
-) : ScopeCoroutine<T>(context + marker, uCont) {
-
-    actual constructor(
-        context: CoroutineContext,
-        uCont: Continuation<T>
-    ) : this(context, UndispatchedMarker(null), uCont)
+) : ScopeCoroutine<T>(context + UndispatchedMarker, uCont) {
 
     private var savedContext: CoroutineContext? = null
     private var savedOldValue: Any? = null
-
-    init {
-        marker.coroutine = this
-    }
 
     fun saveThreadContext(context: CoroutineContext, oldValue: Any?) {
         savedContext = context
