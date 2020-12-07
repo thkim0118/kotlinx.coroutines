@@ -20,7 +20,7 @@ abstract class SemaphoreLincheckTestBase(semaphore: Semaphore, val seqSpec: KCla
     @Operation
     fun tryAcquire() = s.tryAcquire()
 
-    @Operation
+    @Operation(promptCancellation = true)
     suspend fun acquire() = s.acquire()
 
     @Operation(handleExceptionsAsResult = [IllegalStateException::class])
@@ -38,14 +38,16 @@ open class SemaphoreSequential(val permits: Int, val boundMaxPermits: Boolean) :
     private var availablePermits = permits
     private val waiters = ArrayList<CancellableContinuation<Unit>>()
 
-    fun tryAcquire(): Boolean {
+    open fun tryAcquire() = tryAcquireImpl()
+
+    private fun tryAcquireImpl(): Boolean {
         if (availablePermits <= 0) return false
         availablePermits--
         return true
     }
 
     suspend fun acquire() {
-        if (tryAcquire()) return
+        if (tryAcquireImpl()) return
         availablePermits--
         suspendCancellableCoroutine<Unit> { cont ->
             waiters.add(cont)

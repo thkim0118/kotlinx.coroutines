@@ -173,6 +173,9 @@ private class SemaphoreImpl(private val permits: Int, acquiredPermits: Int) : Se
         // Return the permit if the current continuation
         // is cancelled after the `tryResume` invocation
         // because of the prompt cancellation.
+        // Note that this `release()` call can throw
+        // exception if there was a successful concurrent
+        // `release()` invoked without acquiring a permit.
         release()
     }
 }
