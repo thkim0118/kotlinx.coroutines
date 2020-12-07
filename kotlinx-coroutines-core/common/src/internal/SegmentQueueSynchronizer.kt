@@ -360,16 +360,27 @@ internal abstract class SegmentQueueSynchronizer<T : Any> {
                 }
                 // Does the cell store a cancellable continuation?
                 cellState is CancellableContinuation<*> -> {
+                    // Change the cell state to `RESUMING`, so that
+                    // the cancellation handler is not invoked.
+                    if (!segment.cas(i, cellState, RESUMED)) continue@modify_cell
                     // Try to resume the continuation.
                     val token = (cellState as CancellableContinuation<T>).tryResume(value, null, { returnValue(value) })
-                    // Is the resumption successful?
                     if (token != null) {
                         cellState.completeResume(token)
-                        // Mark the cell as `DONE` to avoid
-                        // memory leaks and complete successfully.
-                        segment.set(i, RESUMED)
                         return TRY_RESUME_SUCCESS
+                    } else {
+                        if (cancellationMode === SIMPLE) return TRY_RESUME_FAIL_CANCELLED
+                        val cancelled = onCancellation()
+                        if (cancelled) {
+                            if (!resume(value)) returnValue(value)
+                            return TRY_RESUME_SUCCESS
+                        } else {
+                            returnRefusedValue(value)
+                            return TRY_RESUME_SUCCESS
+                        }
                     }
+                }
+                cellState === CANCELLING -> {
                     // The continuation is cancelled, the handling
                     // logic depends on the cancellation mode.
                     when (cancellationMode) {
@@ -399,13 +410,14 @@ internal abstract class SegmentQueueSynchronizer<T : Any> {
                 }
                 // The cell stores a non-cancellable
                 // continuation, we can simply resume it.
-                else -> {
+                cellState is Continuation<*> -> {
                     // Resume the continuation and mark the cell
                     // as `RESUMED` to avoid memory leaks.
                     (cellState as Continuation<T>).resume(value)
                     segment.set(i, RESUMED)
                     return TRY_RESUME_SUCCESS
                 }
+                else -> error("Unexpected cell state: $cellState")
             }
         }
     }
@@ -459,6 +471,9 @@ internal abstract class SegmentQueueSynchronizer<T : Any> {
         private val index: Int
     ) : CancelHandler() {
         override fun invoke(cause: Throwable?) {
+            // Invoke the cancellation handler
+            // only if the state is not `RESUMED`.
+            if (!segment.tryMarkCancelling(index)) return
             // Do we use simple or smart cancellation?
             if (cancellationMode === SIMPLE) {
                 // In the simple cancellation mode the logic
@@ -566,6 +581,28 @@ private class SQSSegment(id: Long, prev: SQSSegment?, pointers: Int) : Segment<S
     }
 
     /**
+     * TODO
+     * returns `true` on success
+     */
+    fun tryMarkCancelling(index: Int): Boolean {
+        while (true) {
+            val cellState = get(index)
+            when {
+                cellState === RESUMED -> return false
+                cellState is CancellableContinuation<*> -> {
+                    if (cas(index, cellState, CANCELLING)) return true
+                }
+                else -> {
+                    if (cellState is Continuation<*>)
+                        error("Only cancellable continuations can be cancelled, ${cellState::class.simpleName} is found")
+                    else
+                        error("Unexpected cell state: $cellState")
+                }
+            }
+        }
+    }
+
+    /**
      * Marks the cell as refused and returns `null`, so that
      * the [resume] that comes to the cell should notice
      * that its value is refused by the [SegmentQueueSynchronizer],
@@ -591,7 +628,8 @@ private class SQSSegment(id: Long, prev: SQSSegment?, pointers: Int) : Segment<S
      */
     private fun mark(index: Int, marker: Any?): Any? =
         when (val old = getAndSet(index, marker)) {
-            // Did the cell contain the cancelled continuation?
+            // Did the cell contain already cancelled or cancelling continuation?
+            CANCELLING -> null
             is Continuation<*> -> {
                 assert { if (old is CancellableContinuation<*>) old.isCancelled else true }
                 null
@@ -627,13 +665,13 @@ private val TAKEN = Symbol("TAKEN")
 @SharedImmutable
 private val BROKEN = Symbol("BROKEN")
 @SharedImmutable
+private val CANCELLING = Symbol("CANCELLING")
+@SharedImmutable
 private val CANCELLED = Symbol("CANCELLED")
 @SharedImmutable
 private val REFUSE = Symbol("REFUSE")
 @SharedImmutable
 private val RESUMED = Symbol("RESUMED")
-@SharedImmutable
-private val RESUMING_OR_CANCELLING = Symbol("RESUMING_OR_CANCELLING")
 
 private const val TRY_RESUME_SUCCESS = 0
 private const val TRY_RESUME_FAIL_CANCELLED = 1
