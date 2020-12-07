@@ -10,12 +10,14 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.internal.*
 import kotlinx.coroutines.internal.SegmentQueueSynchronizer.CancellationMode.*
 import kotlinx.coroutines.internal.SegmentQueueSynchronizer.ResumeMode.*
-import kotlinx.coroutines.sync.*
+import kotlinx.coroutines.sync.Semaphore
 import org.jetbrains.kotlinx.lincheck.*
 import org.jetbrains.kotlinx.lincheck.annotations.*
 import org.jetbrains.kotlinx.lincheck.annotations.Operation
 import org.jetbrains.kotlinx.lincheck.strategy.managed.modelchecking.*
 import org.jetbrains.kotlinx.lincheck.verifier.*
+import java.lang.Integer.*
+import java.util.concurrent.*
 import kotlin.coroutines.*
 import kotlin.reflect.*
 
@@ -42,7 +44,7 @@ internal class AsyncSemaphore(permits: Int) : SegmentQueueSynchronizer<Unit>(), 
     private val _availablePermits = atomic(permits)
     override val availablePermits get() = _availablePermits.value.coerceAtLeast(0)
 
-    override fun tryAcquire() =  error("Not supported in the ASYNC version")
+    override fun tryAcquire() = false // Not supported in the ASYNC version
 
     override suspend fun acquire() {
         // Decrement the number of available permits.
@@ -82,12 +84,12 @@ internal class AsyncSemaphore(permits: Int) : SegmentQueueSynchronizer<Unit>(), 
 @OptIn(HazardousConcurrentApi::class)
 internal class AsyncSemaphoreSmart(permits: Int) : SegmentQueueSynchronizer<Unit>(), Semaphore {
     override val resumeMode get() = ASYNC
-    override val cancellationMode get() = SMART_SYNC
+    override val cancellationMode get() = SMART_ASYNC
 
     private val _availablePermits = atomic(permits)
     override val availablePermits get() = _availablePermits.value.coerceAtLeast(0)
 
-    override fun tryAcquire() = error("Not supported in the ASYNC version")
+    override fun tryAcquire() = false // Not supported in the ASYNC version
 
     override suspend fun acquire() {
         // Decrement the number of available permits.
@@ -187,37 +189,33 @@ internal class SyncSemaphoreSmart(permits: Int) : SegmentQueueSynchronizer<Boole
     }
 }
 
+class SemaphoreUnboundedSequential1 : SemaphoreSequential(1, false)
+class SemaphoreUnboundedSequential2 : SemaphoreSequential(2, false)
+
+// Comparing to `SemaphoreLincheckTestBase`, it allows `acquire()`-s
+// to have extra suspensions and does not support `tryAcquire()`.
 @OptIn(HazardousConcurrentApi::class)
 abstract class AsyncSemaphoreLincheckTestBase(semaphore: Semaphore, val seqSpec: KClass<*>) : AbstractLincheckTest() {
     private val s = semaphore
 
-    @Operation
+    @Operation(allowExtraSuspension = true, promptCancellation = true)
     suspend fun acquire() = s.acquire()
 
-    @Operation
+    @Operation(handleExceptionsAsResult = [IllegalStateException::class])
     fun release() = s.release()
 
-    override fun <O : Options<O, *>> O.customize(isStressTest: Boolean) =
+    override fun <O : Options<O, *>> O.customize(isStressTest: Boolean): O =
         actorsBefore(0)
-       .sequentialSpecification(seqSpec.java)
+        .sequentialSpecification(seqSpec.java)
 
     override fun ModelCheckingOptions.customize(isStressTest: Boolean) =
         checkObstructionFreedom()
 }
 
-class SemaphoreUnboundedSequential1 : SemaphoreSequential(1, false)
-class SemaphoreUnboundedSequential2 : SemaphoreSequential(2, false)
-
 class AsyncSemaphore1LincheckTest : AsyncSemaphoreLincheckTestBase(AsyncSemaphore(1), SemaphoreUnboundedSequential1::class)
 class AsyncSemaphore2LincheckTest : AsyncSemaphoreLincheckTestBase(AsyncSemaphore(2), SemaphoreUnboundedSequential2::class)
 
-class AsyncSemaphoreSmart1LincheckTest : AsyncSemaphoreLincheckTestBase(AsyncSemaphoreSmart(1), SemaphoreUnboundedSequential1::class) {
-    override fun <O : Options<O, *>> O.customize(isStressTest: Boolean): O =
-        threads(2).actorsPerThread(2)
-
-    override fun ModelCheckingOptions.customize(isStressTest: Boolean): ModelCheckingOptions =
-        invocationsPerIteration(Int.MAX_VALUE)
-}
+class AsyncSemaphoreSmart1LincheckTest : AsyncSemaphoreLincheckTestBase(AsyncSemaphoreSmart(1), SemaphoreUnboundedSequential1::class)
 class AsyncSemaphoreSmart2LincheckTest : AsyncSemaphoreLincheckTestBase(AsyncSemaphoreSmart(2), SemaphoreUnboundedSequential2::class)
 
 class SyncSemaphoreSmart1LincheckTest : SemaphoreLincheckTestBase(SyncSemaphoreSmart(1), SemaphoreUnboundedSequential1::class)
@@ -323,7 +321,7 @@ internal abstract class CountDownLatchLincheckTestBase(val cdl: CountDownLatch, 
     @Operation
     fun remaining() = cdl.remaining()
 
-    @Operation
+    @Operation(promptCancellation = true)
     suspend fun await() = cdl.await()
 
     override fun <O : Options<O, *>> O.customize(isStressTest: Boolean): O =
@@ -437,7 +435,7 @@ internal class Barrier(private val parties: Int) : SegmentQueueSynchronizer<Unit
     }
 }
 
-// TODO: non-atomic cancellation test, the corresponding feature in lincheck is required.
+// TODO: prompt cancellation test
 abstract class BarrierLincheckTestBase(parties: Int, val seqSpec: KClass<*>) : AbstractLincheckTest() {
     private val b = Barrier(parties)
 
@@ -610,6 +608,18 @@ internal class BlockingQueuePool<T: Any> : SegmentQueueSynchronizer<T>(), Blocki
         return elements[i].getAndSet(BROKEN) as T?
     }
 
+    fun stateRepresentation(): String {
+        val elementsBetweenIndices = mutableListOf<Any?>()
+        for (i in min(retrieveIdx.value, insertIdx.value) until max(retrieveIdx.value, insertIdx.value)) {
+            elementsBetweenIndices.add(elements[i].value)
+        }
+        return "availableElements=${availableElements.value}," +
+            "insertIdx=${insertIdx.value}," +
+            "retrieveIdx=${retrieveIdx.value}," +
+            "elements=$elementsBetweenIndices," +
+            "sqs=<${super.toString()}>"
+    }
+
     companion object {
         @JvmStatic
         val BROKEN = Symbol("BROKEN")
@@ -739,7 +749,7 @@ abstract class BlockingPoolLincheckTestBase(val p: BlockingPool<Unit>) : Abstrac
     @Operation
     fun put() = p.put(Unit)
 
-    @Operation(allowExtraSuspension = true)
+    @Operation(allowExtraSuspension = true, promptCancellation = true)
     suspend fun retrieve() {
         val res = p.retrieve()
     }
@@ -747,7 +757,7 @@ abstract class BlockingPoolLincheckTestBase(val p: BlockingPool<Unit>) : Abstrac
     @StateRepresentation
     fun stateRepresentation() = when(p) {
         is BlockingStackPool<*> -> p.stateRepresentation()
-        is BlockingQueuePool<*> -> p.toString()
+        is BlockingQueuePool<*> -> p.stateRepresentation()
         else -> error("Unknown pool type: ${p::class.simpleName}")
     }
 
@@ -784,6 +794,101 @@ class BlockingPoolUnitSequential : VerifierState() {
                 waiters.add(cont)
             }
         }
+    }
+
+    override fun extractState() = elements
+}
+
+
+// ##################
+// # BLOCKING QUEUE #
+// ##################
+
+internal class BlockingQueueSmart<E : Any> : SegmentQueueSynchronizer<Unit>() {
+    private val balance = atomic(0) // #send - #receive
+    private val elements = ConcurrentLinkedQueue<E>() // any queue can be here, even not FIFO.
+
+    override val resumeMode get() = ASYNC
+    override val cancellationMode get() = SMART_ASYNC
+
+    fun send(element: E) {
+        elements.add(element) // store the element into queue at first.
+        val b = balance.getAndIncrement()
+        if (b < 0) { // is there a waiting receiver?
+            resume(Unit)
+        }
+    }
+
+    suspend fun receive(): E {
+        val b = balance.getAndDecrement()
+        if (b <= 0) { // should we suspend?
+            suspendCancellableCoroutine<Unit> { cont ->
+                suspend(cont)
+            }
+        }
+        return elements.remove()
+    }
+
+    override fun onCancellation(): Boolean {
+        val b = balance.getAndIncrement()
+        return b < 0 // resume the next receiver if b >= 0
+    }
+
+    // Incrementing the balance is sufficient for cancellation,
+    // the elements are stored separately, in [elements].
+    override fun tryReturnRefusedValue(value: Unit) = true
+
+    // For prompt cancellation.
+    override fun returnValue(value: Unit) {
+        val b = balance.getAndIncrement()
+        if (b < 0) resume(Unit)
+    }
+}
+
+class BlockingQueueSmartLincheckTest : AbstractLincheckTest() {
+    private val c = BlockingQueueSmart<Int>()
+
+    @Operation
+    fun send(element: Int) = c.send(element)
+
+    @Operation(promptCancellation = true)
+    suspend fun receive() = c.receive()
+
+    override fun <O : Options<O, *>> O.customize(isStressTest: Boolean): O =
+        logLevel(LoggingLevel.INFO)
+        .sequentialSpecification(BlockingQueueSequential::class.java)
+
+    override fun ModelCheckingOptions.customize(isStressTest: Boolean) =
+        checkObstructionFreedom()
+}
+
+class BlockingQueueSequential : VerifierState() {
+    private val receivers = ArrayList<CancellableContinuation<Unit>>()
+    private val elements = ArrayList<Int>()
+
+    fun send(element: Int) {
+        if (receivers.isNotEmpty()) {
+            val r = receivers.removeAt(0)
+            elements += element
+            r.resume(Unit)
+        } else {
+            elements += element
+        }
+    }
+
+    suspend fun receive(): Int =
+        if (elements.isNotEmpty()) {
+            retrieveFirstElement()
+        } else {
+            suspendCancellableCoroutine<Unit> { cont ->
+                receivers += cont
+                cont.invokeOnCancellation { receivers.remove(cont) }
+            }
+            retrieveFirstElement()
+        }
+
+    private fun retrieveFirstElement(): Int {
+        return elements.removeAt(0)
     }
 
     override fun extractState() = elements
