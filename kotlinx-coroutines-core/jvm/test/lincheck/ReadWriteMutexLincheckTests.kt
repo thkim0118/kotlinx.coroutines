@@ -17,14 +17,14 @@ internal class ReadWriteMutexCounterLincheckTest : AbstractLincheckTest() {
     val m = ReadWriteMutexImpl()
     var c = 0
 
-    @Operation(cancellableOnSuspension = true, allowExtraSuspension = true)
+    @Operation(cancellableOnSuspension = false, allowExtraSuspension = true)
     suspend fun inc(): Int = m.withWriteLock { c++ }
 
-    @Operation(cancellableOnSuspension = true, allowExtraSuspension = true)
+    @Operation(cancellableOnSuspension = false, allowExtraSuspension = true)
     suspend fun get(): Int = m.withReadLock { c }
 
     @StateRepresentation
-    fun stateRepresentation(): String = "$c + ${m.stateRepresentation()}"
+    fun stateRepresentation(): String = "$c + ${m.stateRepresentation}"
 
     override fun <O : Options<O, *>> O.customize(isStressTest: Boolean): O =
         actorsBefore(0)
@@ -75,8 +75,8 @@ class ReadWriteMutexLincheckTest : AbstractLincheckTest() {
         return true
     }
 
-    @StateRepresentation
-    fun stateRepresentation() = m.stateRepresentation()
+//    @StateRepresentation
+//    fun stateRepresentation() = m.stateRepresentation()
 
     override fun <O : Options<O, *>> O.customize(isStressTest: Boolean) =
         actorsBefore(0)
