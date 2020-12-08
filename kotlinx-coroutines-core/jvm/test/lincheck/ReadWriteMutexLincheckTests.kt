@@ -20,7 +20,7 @@ internal class ReadWriteMutexCounterLincheckTest : AbstractLincheckTest() {
     @Operation(cancellableOnSuspension = false, allowExtraSuspension = true)
     suspend fun inc(): Int = m.withWriteLock { c++ }
 
-    @Operation(cancellableOnSuspension = false, allowExtraSuspension = true)
+    @Operation(cancellableOnSuspension = true, allowExtraSuspension = true)
     suspend fun get(): Int = m.withReadLock { c }
 
     @StateRepresentation
@@ -60,7 +60,7 @@ class ReadWriteMutexLincheckTest : AbstractLincheckTest() {
         return true
     }
 
-    @Operation(cancellableOnSuspension = true, allowExtraSuspension = true)
+    @Operation(cancellableOnSuspension = false, allowExtraSuspension = true)
     suspend fun writeLock(@Param(gen = ThreadIdGen::class) threadId: Int) {
         m.writeLock()
         assert(!writeLockAcquired[threadId]) { "The mutex is not reentrant" }
@@ -75,8 +75,8 @@ class ReadWriteMutexLincheckTest : AbstractLincheckTest() {
         return true
     }
 
-//    @StateRepresentation
-//    fun stateRepresentation() = m.stateRepresentation()
+    @StateRepresentation
+    fun stateRepresentation() = m.stateRepresentation
 
     override fun <O : Options<O, *>> O.customize(isStressTest: Boolean) =
         actorsBefore(0)

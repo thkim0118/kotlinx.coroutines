@@ -153,6 +153,7 @@ public suspend inline fun <T> ReadWriteMutex.withWriteLock(action: () -> T): T {
  *                             and resume it.
  *
  */
+@OptIn(HazardousConcurrentApi::class)
 internal class ReadWriteMutexImpl : ReadWriteMutex {
     private val WR = atomic(0) // -1 => RLA is set
     private val STATE = atomic(0L)
@@ -160,11 +161,48 @@ internal class ReadWriteMutexImpl : ReadWriteMutex {
     private val sqsWriters = object: SegmentQueueSynchronizer<Unit>() {
         override val resumeMode get() = ResumeMode.ASYNC
         override val cancellationMode get() = CancellationMode.SIMPLE
+
+        override fun onCancellation(): Boolean {
+            while (true) {
+                val state = STATE.value
+                if (state.ww == 0) return false
+                if (STATE.compareAndSet(state, constructState(state.ar, state.wla, state.ww - 1, state.wlrp)))
+                    return true
+            }
+        }
+
+        override fun tryReturnRefusedValue(value: Unit): Boolean {
+            writeUnlock()
+            return true
+        }
+
+        // for prompt cancellation
+        override fun returnValue(value: Unit) {
+            writeUnlock()
+        }
     }
 
     private val sqsReaders = object: SegmentQueueSynchronizer<Unit>() {
         override val resumeMode get() = ResumeMode.ASYNC
-        override val cancellationMode get() = CancellationMode.SIMPLE
+        override val cancellationMode get() = CancellationMode.SMART_SYNC
+
+        override fun onCancellation(): Boolean {
+            while (true) {
+                val wr = WR.value
+                if (wr == 0) return false
+                if (WR.compareAndSet(wr, wr - 1)) return true
+            }
+        }
+
+        override fun tryReturnRefusedValue(value: Unit): Boolean {
+            readUnlock()
+            return true
+        }
+
+        // for prompt cancellation
+        override fun returnValue(value: Unit) {
+            readUnlock()
+        }
     }
 
     @HazardousConcurrentApi
