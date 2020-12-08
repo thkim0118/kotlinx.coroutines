@@ -6,7 +6,7 @@ package kotlinx.coroutines.sync
 
 import kotlinx.atomicfu.*
 import kotlinx.coroutines.*
-import kotlinx.coroutines.internal.SegmentQueueSynchronizer
+import kotlinx.coroutines.internal.*
 
 /**
  * A readers-writer mutex maintains a logical pair of locks, one for
@@ -154,96 +154,8 @@ public suspend inline fun <T> ReadWriteMutex.withWriteLock(action: () -> T): T {
  *
  */
 internal class ReadWriteMutexImpl : ReadWriteMutex {
-    private val AR = atomic(0)
+    private val WR = atomic(0) // -1 => RLA is set
     private val STATE = atomic(0L)
-
-    @HazardousConcurrentApi
-    override suspend fun readLock() {
-        // 1. Increment the number of readers at first
-        AR.getAndIncrement()
-        // 2. Try to set `RLA` flag, increment `WR` otherwise
-        val acquired: Boolean
-        while (true) {
-            val state = STATE.value
-            // Is the write lock acquired or is there a waiting writer?
-            if (state.wla || state.ww > 0) {
-                // This `readLock` invocation should suspend,
-                // change the state correspondingly.
-                if (STATE.compareAndSet(state, constructState(state.rla, state.wr + 1, state.wla, state.ww))) {
-                    acquired = false
-                    break
-                }
-            } else {
-                // There is no writer waiting or holding the lock,
-                // try to grab å reader lock by setting `RLA` flag
-                // if it is not already set.
-                if (state.rla) {
-                    acquired = true
-                    break
-                }
-                if (STATE.compareAndSet(state, constructState(true, state.wr, state.wla, state.ww))) {
-                    acquired = true
-                    break
-                }
-            }
-        }
-        // 3. Complete the operation immediately if the lock is successfully acquired.
-        if (acquired) return
-        // 4. This operation should suspend, decrement the initially incremented `AR`
-        while (true) {
-            val ar = AR.value
-            if (ar == 1) {
-                // check RLA again!
-                while (true) {
-                    val state = STATE.value
-                    if (state.wr == 0) {
-                        AR.decrementAndGet()
-                        suspendCancellableCoroutine<Unit> { sqsReaders.suspend(it) }
-                        return
-                    }
-                    if (state.rla) {
-                        if (STATE.compareAndSet(state, constructState(true, state.wr - 1, false, state.ww)))
-                            return
-                    } else {
-                        AR.decrementAndGet()
-                        suspendCancellableCoroutine<Unit> { sqsReaders.suspend(it) }
-                        return
-                    }
-                }
-            } else {
-                if (AR.compareAndSet(ar, ar - 1)) {
-                    suspendCancellableCoroutine<Unit> { sqsReaders.suspend(it) }
-                    return
-                }
-            }
-        }
-    }
-
-    @HazardousConcurrentApi
-    override fun readUnlock() {
-        while (true) {
-            val ar = AR.value
-            if (ar > 1) {
-                if (AR.compareAndSet(ar, ar - 1)) return
-            } else {
-                while (true) {
-                    val state = STATE.value
-                    if (state.ww == 0) {
-                        if (STATE.compareAndSet(state, constructState(false, state.wr, false, 0))) {
-                            AR.decrementAndGet()
-                            return
-                        }
-                    } else {
-                        if (STATE.compareAndSet(state, constructState(false, state.wr, true, state.ww - 1))) {
-                            AR.decrementAndGet()
-                            sqsWriters.resume(Unit)
-                            return
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     private val sqsWriters = object: SegmentQueueSynchronizer<Unit>() {
         override val resumeMode get() = ResumeMode.ASYNC
@@ -256,36 +168,103 @@ internal class ReadWriteMutexImpl : ReadWriteMutex {
     }
 
     @HazardousConcurrentApi
+    override suspend fun readLock() {
+        if (tryAcquireReadLock()) return
+        WR.incrementAndGet()
+        while (true) {
+            val state = STATE.value
+            // Is there a writer holding the lock or waiting for it?
+            if (state.wla || state.ww > 0) {
+                suspendCancellableCoroutine<Unit> { sqsReaders.suspend(it) }
+                return
+            } else {
+                while (true) {
+                    val wr = WR.value
+                    if (wr == 0) {
+                        suspendCancellableCoroutine<Unit> { sqsReaders.suspend(it) }
+                        return
+                    } else if (WR.compareAndSet(wr, wr - 1)) {
+                        readLock() // try again
+                        return
+                    }
+                }
+            }
+        }
+    }
+
+    private fun tryAcquireReadLock(): Boolean {
+        while (true) {
+            val state = STATE.value
+            if (state.wla || state.ww > 0) return false
+            if (STATE.compareAndSet(state, constructState(state.ar + 1, false, 0, state.wlrp)))
+                return true
+        }
+    }
+
+    @HazardousConcurrentApi
+    override fun readUnlock() {
+        while (true) {
+            val state = STATE.value
+            if (state.ar == 1) {
+                val resumeWriter = state.ww > 0
+                if (state.wlrp) {
+                    if (STATE.compareAndSet(state, constructState(0, false, state.ww, true)))
+                        return
+                } else if (resumeWriter) {
+                    if (STATE.compareAndSet(state, constructState(0, true, state.ww - 1, false))) {
+                        sqsWriters.resume(Unit)
+                        return
+                    }
+                } else {
+                    if (STATE.compareAndSet(state, constructState(0, false, 0, false))) {
+                        return
+                    }
+                }
+            } else {
+                assert { !state.wla }
+                if (STATE.compareAndSet(state, constructState(state.ar - 1, false, state.ww, state.wlrp))) {
+                    return
+                }
+            }
+        }
+    }
+
+    @HazardousConcurrentApi
     override suspend fun writeLock() {
         while (true) {
             val state = STATE.value
-            if (state.wla || state.rla) {
-                if (STATE.compareAndSet(state, constructState(state.rla, state.wr, state.wla, state.ww + 1)))
-                    break
-            } else {
-                if (STATE.compareAndSet(state, constructState(false, 0, true, 0)))
+            if (!state.wla && !state.wlrp && state.ar == 0) {
+                assert { state.ww == 0 }
+                if (STATE.compareAndSet(state, constructState(0, true, 0, false))) {
                     return
+                }
+            } else {
+                if (STATE.compareAndSet(state, constructState(state.ar, state.wla, state.ww + 1, state.wlrp))) {
+                    suspendCancellableCoroutine<Unit> { cont -> sqsWriters.suspend(cont) }
+                    return
+                }
             }
         }
-        suspendCancellableCoroutine<Unit> { sqsWriters.suspend(it) }
     }
 
     @HazardousConcurrentApi
     override fun writeUnlock() {
         while (true) {
             val state = STATE.value
-            // Let's release readers at first (just for the demo)
             if (state.ww > 0) {
-                if (STATE.compareAndSet(state, constructState(false, state.wr, true, state.ww - 1))) {
+                if (STATE.compareAndSet(state, constructState(0, true, state.ww - 1, false))) {
                     sqsWriters.resume(Unit)
                     return
                 }
             } else {
-                val wr = state.wr
-                val rla = wr > 0
-                if (STATE.compareAndSet(state, constructState(rla, 0, false, state.ww))) {
-                    AR.getAndAdd(state.wr)
-                    repeat(state.wr) { sqsReaders.resume(Unit) }
+                if (STATE.compareAndSet(state, constructState(1, false, 0, true))) {
+                    // activeReaders = 1 just to be sure that the writer lock cannot be acquired.
+                    // in some sense, we just degraded the current lock from write to read.
+                    val wr = WR.getAndSet(0)
+                    STATE.update { state2 -> constructState(state2.ar + wr, false, state2.ww, true) }
+                    repeat(wr) { sqsReaders.resume(Unit) }
+                    STATE.update { state2 -> constructState(state2.ar, false, state2.ww, false) }
+                    readUnlock()
                     return
                 }
             }
@@ -293,24 +272,24 @@ internal class ReadWriteMutexImpl : ReadWriteMutex {
     }
 
     internal val stateRepresentation: String get() =
-        "ar=${AR.value}" +
-        ",rla=${STATE.value.rla},wla=${STATE.value.wla}" +
-        ",wr=${STATE.value.wr},ww=${STATE.value.ww}" +
-        ",sqs_r=$sqsReaders,sqs_w=$sqsWriters"
+        "<wr=${WR.value},ar=${STATE.value.ar}" +
+        ",wla=${STATE.value.wla},ww=${STATE.value.ww}" +
+        ",wlrp=${STATE.value.wlrp}" +
+        ",sqs_r=$sqsReaders,sqs_w=$sqsWriters>"
 }
 
-private fun constructState(rla: Boolean, waitingReaders: Int, wla: Boolean, waitingWriters: Int): Long =
-    (if (rla) RLA_BIT else 0) +
+private fun constructState(activeReaders: Int, wla: Boolean, waitingWriters: Int, wlrp: Boolean): Long =
     (if (wla) WLA_BIT else 0) +
-    waitingReaders * WR_MULTIPLIER +
+    (if (wlrp) WLRP_BIT else 0) +
+    activeReaders * AR_MULTIPLIER +
     waitingWriters * WW_MULTIPLIER
 
-private val Long.rla: Boolean get() = this or RLA_BIT == this
 private val Long.wla: Boolean get() = this or WLA_BIT == this
-private val Long.ww: Int get() = ((this % WR_MULTIPLIER) / WW_MULTIPLIER).toInt()
-private val Long.wr: Int get() = (this / WR_MULTIPLIER).toInt()
+private val Long.wlrp: Boolean get() = this or WLRP_BIT == this
+private val Long.ww: Int get() = ((this % AR_MULTIPLIER) / WW_MULTIPLIER).toInt()
+private val Long.ar: Int get() = (this / AR_MULTIPLIER).toInt()
 
 private const val WLA_BIT = 1L
-private const val RLA_BIT = 2L
-private const val WW_MULTIPLIER = 100L
-private const val WR_MULTIPLIER = 100_000L
+private const val WLRP_BIT = 2L
+private const val WW_MULTIPLIER = 1024L
+private const val AR_MULTIPLIER = 1024L * 1024L
