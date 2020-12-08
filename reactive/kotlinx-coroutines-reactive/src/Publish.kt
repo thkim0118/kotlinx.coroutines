@@ -75,6 +75,7 @@ private const val SIGNALLED = -2L  // already signalled subscriber onCompleted/o
 private val DEFAULT_HANDLER: (Throwable, CoroutineContext) -> Unit = { t, ctx -> if (t !is CancellationException) handleCoroutineException(ctx, t) }
 
 @Suppress("CONFLICTING_JVM_DECLARATIONS", "RETURN_TYPE_MISMATCH_ON_INHERITANCE")
+@OptIn(HazardousConcurrentApi::class)
 @InternalCoroutinesApi
 public class PublisherCoroutine<in T>(
     parentContext: CoroutineContext,
