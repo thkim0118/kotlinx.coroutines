@@ -17,10 +17,10 @@ internal class ReadWriteMutexCounterLincheckTest : AbstractLincheckTest() {
     val m = ReadWriteMutexImpl()
     var c = 0
 
-    @Operation(cancellableOnSuspension = false, allowExtraSuspension = true)
+    @Operation(allowExtraSuspension = true, promptCancellation = true)
     suspend fun inc(): Int = m.withWriteLock { c++ }
 
-    @Operation(cancellableOnSuspension = true, allowExtraSuspension = true)
+    @Operation(allowExtraSuspension = true, promptCancellation = true)
     suspend fun get(): Int = m.withReadLock { c }
 
     @StateRepresentation
@@ -30,6 +30,9 @@ internal class ReadWriteMutexCounterLincheckTest : AbstractLincheckTest() {
         actorsBefore(0)
         .actorsAfter(0)
         .sequentialSpecification(ReadWriteMutexCounterSequential::class.java)
+
+    override fun ModelCheckingOptions.customize(isStressTest: Boolean) =
+        verboseTrace(true)
 }
 
 class ReadWriteMutexCounterSequential : VerifierState() {
@@ -46,7 +49,7 @@ class ReadWriteMutexLincheckTest : AbstractLincheckTest() {
     private val readLockAcquired = IntArray(6)
     private val writeLockAcquired = BooleanArray(6)
 
-    @Operation(cancellableOnSuspension = true, allowExtraSuspension = true)
+    @Operation(allowExtraSuspension = true, promptCancellation = true)
     suspend fun readLock(@Param(gen = ThreadIdGen::class) threadId: Int) {
         m.readLock()
         readLockAcquired[threadId]++
@@ -60,10 +63,12 @@ class ReadWriteMutexLincheckTest : AbstractLincheckTest() {
         return true
     }
 
-    @Operation(cancellableOnSuspension = false, allowExtraSuspension = true)
+    @Operation(allowExtraSuspension = true, promptCancellation = true)
     suspend fun writeLock(@Param(gen = ThreadIdGen::class) threadId: Int) {
         m.writeLock()
-        assert(!writeLockAcquired[threadId]) { "The mutex is not reentrant" }
+        assert(!writeLockAcquired[threadId]) {
+            "The mutex is not reentrant, this `writeLock()` invocation had to suspend"
+        }
         writeLockAcquired[threadId] = true
     }
 
@@ -84,7 +89,7 @@ class ReadWriteMutexLincheckTest : AbstractLincheckTest() {
         .sequentialSpecification(ReadWriteMutexSequential::class.java)
 
     override fun ModelCheckingOptions.customize(isStressTest: Boolean) =
-        checkObstructionFreedom()
+        checkObstructionFreedom().verboseTrace(true)
 }
 
 class ReadWriteMutexSequential : VerifierState() {

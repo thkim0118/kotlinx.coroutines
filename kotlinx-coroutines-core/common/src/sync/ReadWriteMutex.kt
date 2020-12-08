@@ -155,19 +155,26 @@ public suspend inline fun <T> ReadWriteMutex.withWriteLock(action: () -> T): T {
  */
 @OptIn(HazardousConcurrentApi::class)
 internal class ReadWriteMutexImpl : ReadWriteMutex {
-    private val WR = atomic(0) // -1 => RLA is set
+    private val WR = atomic(0)
     private val STATE = atomic(0L)
 
     private val sqsWriters = object: SegmentQueueSynchronizer<Unit>() {
         override val resumeMode get() = ResumeMode.ASYNC
-        override val cancellationMode get() = CancellationMode.SIMPLE
+        override val cancellationMode get() = CancellationMode.SMART_ASYNC
 
         override fun onCancellation(): Boolean {
             while (true) {
                 val state = STATE.value
                 if (state.ww == 0) return false
-                if (STATE.compareAndSet(state, constructState(state.ar, state.wla, state.ww - 1, state.wlrp)))
-                    return true
+                if (state.ww == 1 && !state.wla && !state.wlrp) {
+                    if (STATE.compareAndSet(state, constructState(state.ar + 1, false, 0, true))) {
+                        completeWriteUnlock()
+                        return true
+                    }
+                } else {
+                    if (STATE.compareAndSet(state, constructState(state.ar, state.wla, state.ww - 1, state.wlrp)))
+                        return true
+                }
             }
         }
 
@@ -184,7 +191,7 @@ internal class ReadWriteMutexImpl : ReadWriteMutex {
 
     private val sqsReaders = object: SegmentQueueSynchronizer<Unit>() {
         override val resumeMode get() = ResumeMode.ASYNC
-        override val cancellationMode get() = CancellationMode.SMART_SYNC
+        override val cancellationMode get() = CancellationMode.SMART_ASYNC
 
         override fun onCancellation(): Boolean {
             while (true) {
@@ -296,13 +303,25 @@ internal class ReadWriteMutexImpl : ReadWriteMutex {
                 }
             } else {
                 if (STATE.compareAndSet(state, constructState(1, false, 0, true))) {
-                    // activeReaders = 1 just to be sure that the writer lock cannot be acquired.
-                    // in some sense, we just degraded the current lock from write to read.
-                    val wr = WR.getAndSet(0)
-                    STATE.update { state2 -> constructState(state2.ar + wr, false, state2.ww, true) }
-                    repeat(wr) { sqsReaders.resume(Unit) }
-                    STATE.update { state2 -> constructState(state2.ar, false, state2.ww, false) }
-                    readUnlock()
+                    completeWriteUnlock()
+                    return
+                }
+            }
+        }
+    }
+
+    private fun completeWriteUnlock() {
+        val wr = WR.getAndSet(0)
+        STATE.update { state2 -> constructState(state2.ar + wr, false, state2.ww, true) }
+        repeat(wr) { sqsReaders.resume(Unit) }
+        STATE.update { state2 -> constructState(state2.ar, false, state2.ww, false) }
+        readUnlock()
+        if (WR.value > 0) {
+            while (true) {
+                val state3 = STATE.value
+                if (state3.wla || state3.ww > 0 || state3.wlrp) return
+                if (STATE.compareAndSet(state3, constructState(state3.ar + 1, false, 0, true))) {
+                    completeWriteUnlock()
                     return
                 }
             }

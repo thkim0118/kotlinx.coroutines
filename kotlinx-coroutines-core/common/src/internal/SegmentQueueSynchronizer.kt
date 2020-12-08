@@ -241,7 +241,13 @@ internal abstract class SegmentQueueSynchronizer<T : Any> {
         if (value !== BROKEN && segment.cas(i, value, TAKEN)) {
             // The elimination is successfully performed,
             // resume the continuation with the value and complete.
-            cont.resume(value as T)
+            value as T
+            if (cont is CancellableContinuation<*>) {
+                cont as CancellableContinuation<T>
+                cont.resume(value, { returnValue(value) }) // TODO do we really need this?
+            } else {
+                cont.resume(value)
+            }
             return true
         }
         // The cell is broken, this can happen only in `SYNC` resumption mode.
