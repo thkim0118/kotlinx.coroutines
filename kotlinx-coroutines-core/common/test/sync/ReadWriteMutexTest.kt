@@ -10,7 +10,7 @@ import kotlin.test.*
 @OptIn(HazardousConcurrentApi::class)
 class ReadWriteMutexTest : TestBase() {
     @Test
-    fun `simple single coroutine test`() = runTest {
+    fun simpleSingleCoroutineTest() = runTest {
         val m = ReadWriteMutex()
         m.readLock()
         m.readLock()
@@ -22,7 +22,7 @@ class ReadWriteMutexTest : TestBase() {
     }
 
     @Test
-    fun `simple multiple coroutines test`() = runTest {
+    fun multipleCoroutinesTest() = runTest {
         val m = ReadWriteMutex()
         m.readLock()
         expect(1)
@@ -49,7 +49,7 @@ class ReadWriteMutexTest : TestBase() {
     }
 
     @Test
-    fun `acquireRead does not suspend after cancelled acquireWrite`() = runTest {
+    fun acquireReadSucceedsAfterCancelledAcquireWrite() = runTest {
         val m = ReadWriteMutex()
         m.readLock()
         val wJob = launch {

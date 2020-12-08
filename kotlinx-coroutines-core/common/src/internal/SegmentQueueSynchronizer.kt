@@ -176,27 +176,6 @@ internal abstract class SegmentQueueSynchronizer<T : Any> {
         returnValue(value)
     }
 
-    fun refuseNext() {
-        check(cancellationMode == SMART_SYNC || cancellationMode == SMART_ASYNC) {
-            "refuseNext works only with smart cancellation, but $cancellationMode has been detected"
-        }
-        // Increment `enqIdx` and find the segment
-        // with the corresponding id. It is guaranteed
-        // that this segment is not removed since at
-        // least the cell for this [suspend] invocation
-        // is not in the `CANCELLED` state.
-        val curTail = this.tail.value
-        val enqIdx = enqIdx.getAndIncrement()
-        val segment = this.tail.findSegmentAndMoveForward(id = enqIdx / SEGMENT_SIZE, startFrom = curTail,
-            createNewSegment = ::createSegment).segment
-        assert { segment.id == enqIdx / SEGMENT_SIZE }
-        // Try to mark the cell as refused,
-        // or refuse the already stored value.
-        val i = (enqIdx % SEGMENT_SIZE).toInt()
-        val value = segment.markRefused(i) ?: return
-        returnRefusedValue(value as T)
-    }
-
     /**
      * Puts the specified continuation into the waiting queue, and returns `true` on success.
      * Since [suspend] and [resume] can be invoked concurrently (similarly to `park` and `unpark`

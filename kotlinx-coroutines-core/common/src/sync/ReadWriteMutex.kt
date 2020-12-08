@@ -7,6 +7,7 @@ package kotlinx.coroutines.sync
 import kotlinx.atomicfu.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.internal.*
+import kotlin.js.*
 
 /**
  * A readers-writer mutex maintains a logical pair of locks, one for
@@ -85,6 +86,7 @@ public interface ReadWriteMutex {
  *
  * TODO: fairness
  */
+@JsName("_ReadWriteMutex")
 public fun ReadWriteMutex(): ReadWriteMutex = ReadWriteMutexImpl()
 
 /**
@@ -158,7 +160,9 @@ internal class ReadWriteMutexImpl : ReadWriteMutex {
     private val WR = atomic(0)
     private val STATE = atomic(0L)
 
-    private val sqsWriters = object: SegmentQueueSynchronizer<Unit>() {
+    private val sqsWriters = WritersSQS()
+
+    private inner class WritersSQS : SegmentQueueSynchronizer<Unit>() {
         override val resumeMode get() = ResumeMode.ASYNC
         override val cancellationMode get() = CancellationMode.SMART_ASYNC
 
@@ -178,18 +182,16 @@ internal class ReadWriteMutexImpl : ReadWriteMutex {
             }
         }
 
-        override fun tryReturnRefusedValue(value: Unit): Boolean {
-            writeUnlock()
-            return true
-        }
+        // Fails since we have not changed the state in `onCancellation()`,
+        // the value should be returned by `returnValue()` then.
+        override fun tryReturnRefusedValue(value: Unit) = false
 
-        // for prompt cancellation
-        override fun returnValue(value: Unit) {
-            writeUnlock()
-        }
+        override fun returnValue(value: Unit) = writeUnlock()
     }
 
-    private val sqsReaders = object: SegmentQueueSynchronizer<Unit>() {
+    private val sqsReaders = ReadersSQS()
+
+    private inner class ReadersSQS : SegmentQueueSynchronizer<Unit>() {
         override val resumeMode get() = ResumeMode.ASYNC
         override val cancellationMode get() = CancellationMode.SMART_ASYNC
 
@@ -201,15 +203,11 @@ internal class ReadWriteMutexImpl : ReadWriteMutex {
             }
         }
 
-        override fun tryReturnRefusedValue(value: Unit): Boolean {
-            readUnlock()
-            return true
-        }
+        // Fails since we have not changed the state in `onCancellation()`,
+        // the value should be returned by `returnValue()` then.
+        override fun tryReturnRefusedValue(value: Unit) = false
 
-        // for prompt cancellation
-        override fun returnValue(value: Unit) {
-            readUnlock()
-        }
+        override fun returnValue(value: Unit) = readUnlock()
     }
 
     @HazardousConcurrentApi
