@@ -86,11 +86,10 @@ internal open class CancellableContinuationImpl<in T>(
     public override val isCancelled: Boolean get() = state is CancelledContinuation
 
     // We cannot invoke `state.toString()` since it may cause a circular dependency
-    private val stateDebugRepresentation get() = when {
-        isActive -> "Active"
-        isCancelled -> "Cancelled"
-        isCompleted -> "Completed"
-        else -> error("Unexpected state: $state")
+    private val stateDebugRepresentation get() = when(state) {
+        is NotCompleted -> "Active"
+        is CancelledContinuation -> "Cancelled"
+        else -> "Completed"
     }
 
     public override fun initCancellability() {
@@ -130,7 +129,7 @@ internal open class CancellableContinuationImpl<in T>(
         val parent = delegate.context[Job] ?: return // fast path 3 -- don't do anything without parent
         val handle = parent.invokeOnCompletion(
             onCancelling = true,
-            handler = ChildContinuation(parent, this).asHandler
+            handler = ChildContinuation(this).asHandler
         )
         parentHandle = handle
         // now check our state _after_ registering (could have completed while we were registering)
