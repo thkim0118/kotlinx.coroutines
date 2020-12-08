@@ -17,10 +17,10 @@ internal class ReadWriteMutexCounterLincheckTest : AbstractLincheckTest() {
     val m = ReadWriteMutexImpl()
     var c = 0
 
-    @Operation(allowExtraSuspension = true, promptCancellation = true)
+    @Operation(allowExtraSuspension = true, promptCancellation = false)
     suspend fun inc(): Int = m.withWriteLock { c++ }
 
-    @Operation(allowExtraSuspension = true, promptCancellation = true)
+    @Operation(allowExtraSuspension = true, promptCancellation = false)
     suspend fun get(): Int = m.withReadLock { c }
 
     @StateRepresentation
@@ -49,7 +49,7 @@ class ReadWriteMutexLincheckTest : AbstractLincheckTest() {
     private val readLockAcquired = IntArray(6)
     private val writeLockAcquired = BooleanArray(6)
 
-    @Operation(allowExtraSuspension = true, promptCancellation = true)
+    @Operation(allowExtraSuspension = true, promptCancellation = false)
     suspend fun readLock(@Param(gen = ThreadIdGen::class) threadId: Int) {
         m.readLock()
         readLockAcquired[threadId]++
@@ -63,7 +63,7 @@ class ReadWriteMutexLincheckTest : AbstractLincheckTest() {
         return true
     }
 
-    @Operation(allowExtraSuspension = true, promptCancellation = true)
+    @Operation(allowExtraSuspension = true, promptCancellation = false)
     suspend fun writeLock(@Param(gen = ThreadIdGen::class) threadId: Int) {
         m.writeLock()
         assert(!writeLockAcquired[threadId]) {
